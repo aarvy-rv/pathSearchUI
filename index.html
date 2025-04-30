@@ -1,0 +1,486 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pathfinding Visualizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.23.0/cytoscape.min.js"></script>
+    <style>
+        #cy {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #e5e7eb;
+            background-color: #f9fafb;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">Pathfinding Visualizer</h1>
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Upload Graph File</label>
+                    <input type="file" id="graphFile" accept=".txt" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Upload Heuristic File (for A*)</label>
+                    <input type="file" id="heuristicFile" accept=".txt" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div>
+                    <label for="algorithm" class="block text-sm font-medium text-gray-700">Search Algorithm</label>
+                    <select id="algorithm" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                        <option value="bfs">BFS</option>
+                        <option value="dfs">DFS</option>
+                        <option value="ucs">UCS</option>
+                        <option value="a*">A*</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="source" class="block text-sm font-medium text-gray-700">Source City</label>
+                    <input type="text" id="source" class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., A">
+                </div>
+                <div>
+                    <label for="destination" class="block text-sm font-medium text-gray-700">Destination City</label>
+                    <input type="text" id="destination" class="mt-1 block w-full py-2 px-3 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., B">
+                </div>
+            </div>
+            <button id="run" class="w-full py-2 px-4 bg-blue-600 text-white rounded-md hover:bg-blue-700">Run Pathfinding</button>
+        </div>
+        <div class="mt-6">
+            <h2 class="text-xl font-semibold mb-2 text-gray-800">Graph Visualization</h2>
+            <div id="cy"></div>
+        </div>
+        <div class="mt-6 bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-2 text-gray-800">Path Details</h2>
+            <div id="path-details" class="text-sm text-gray-700">
+                <p id="path-sequence" class="mb-2"></p>
+                <table id="path-table" class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-gray-100">
+                            <th class="border p-2">Segment</th>
+                            <th class="border p-2">Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody id="path-table-body"></tbody>
+                </table>
+                <p id="total-cost" class="mt-2 font-semibold"></p>
+            </div>
+        </div>
+        <div class="mt-6 bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-2 text-gray-800">Output Log</h2>
+            <pre id="output" class="text-sm text-gray-700 whitespace-pre-wrap"></pre>
+        </div>
+    </div>
+    <script>
+        // Check if Cytoscape is loaded
+        if (typeof cytoscape === 'undefined') {
+            console.error('Cytoscape.js failed to load. Please check the CDN URL or network connection.');
+            document.getElementById('output').textContent = 'Error: Cytoscape.js failed to load. Please check your internet connection or try refreshing the page.';
+        }
+
+        let cy;
+        let adj = new Map();
+        let heuristic = new Map();
+        let parseErrors = [];
+
+        function initGraph() {
+            try {
+                cy = cytoscape({
+                    container: document.getElementById('cy'),
+                    style: [
+                        {
+                            selector: 'node',
+                            style: {
+                                'label': 'data(id)',
+                                'background-color': '#3b82f6',
+                                'color': '#000000',
+                                'font-size': '14px',
+                                'width': '40px',
+                                'height': '40px',
+                                'text-valign': 'center',
+                                'text-halign': 'center',
+                                'text-wrap': 'wrap',
+                                'text-max-width': '80px'
+                            }
+                        },
+                        {
+                            selector: 'edge',
+                            style: {
+                                'width': 3,
+                                'line-color': '#9ca3af',
+                                'label': 'data(weight)',
+                                'color': '#000000',
+                                'font-size': '12px',
+                                'font-weight': 'bold',
+                                'text-background-color': '#ffffff',
+                                'text-background-opacity': 0.8,
+                                'text-background-padding': '2px',
+                                'curve-style': 'bezier'
+                            }
+                        },
+                        {
+                            selector: '.highlighted-node',
+                            style: {
+                                'background-color': '#dc2626'
+                            }
+                        },
+                        {
+                            selector: '.highlighted-edge',
+                            style: {
+                                'line-color': '#dc2626',
+                                'width': 5
+                            }
+                        }
+                    ],
+                    layout: {
+                        name: 'cose',
+                        idealEdgeLength: 100,
+                        nodeOverlap: 20,
+                        nodeRepulsion: 400000,
+                        gravity: 0.4,
+                        numIter: 1000
+                    }
+                });
+                console.log('Cytoscape initialized successfully.');
+            } catch (error) {
+                console.error('Error initializing Cytoscape:', error);
+                document.getElementById('output').textContent = 'Error initializing graph visualization. Please check the console for details.';
+            }
+        }
+
+        document.getElementById('graphFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const outputDiv = document.getElementById('output');
+            parseErrors = [];
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                adj.clear();
+                cy.elements().remove();
+                const lines = e.target.result.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    let line = lines[i].trim();
+                    if (line === 'END' || line === '') continue;
+                    const parts = line.split(/\s+/);
+                    if (parts.length !== 3) {
+                        parseErrors.push(`Line ${i + 1}: Expected 3 values (city1 city2 cost), got ${parts.length}: "${line}"`);
+                        continue;
+                    }
+                    const [city1, city2, cost] = parts;
+                    const costNum = parseInt(cost);
+                    if (isNaN(costNum) || costNum < 0) {
+                        parseErrors.push(`Line ${i + 1}: Invalid cost "${cost}" in line: "${line}"`);
+                        continue;
+                    }
+                    if (!city1 || !city2) {
+                        parseErrors.push(`Line ${i + 1}: Invalid city name in line: "${line}"`);
+                        continue;
+                    }
+                    if (!adj.has(city1)) adj.set(city1, []);
+                    if (!adj.has(city2)) adj.set(city2, []);
+                    adj.get(city1).push([city2, costNum]);
+                    adj.get(city2).push([city1, costNum]);
+                    if (!cy.getElementById(city1).length) cy.add({ group: 'nodes', data: { id: city1 } });
+                    if (!cy.getElementById(city2).length) cy.add({ group: 'nodes', data: { id: city2 } });
+                    if (!cy.edges(`[source = "${city1}"][target = "${city2}"]`).length &&
+                        !cy.edges(`[source = "${city2}"][target = "${city1}"]`).length) {
+                        cy.add({ group: 'edges', data: { id: `${city1}-${city2}`, source: city1, target: city2, weight: costNum } });
+                    }
+                }
+                cy.layout({
+                    name: 'cose',
+                    idealEdgeLength: 100,
+                    nodeOverlap: 20,
+                    nodeRepulsion: 400000,
+                    gravity: 0.4,
+                    numIter: 1000
+                }).run();
+                if (parseErrors.length > 0) {
+                    outputDiv.textContent = `Graph loaded with errors:\n${parseErrors.join('\n')}`;
+                } else {
+                    outputDiv.textContent = 'Graph loaded successfully.';
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        document.getElementById('heuristicFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const outputDiv = document.getElementById('output');
+            parseErrors = [];
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                heuristic.clear();
+                const lines = e.target.result.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    let line = lines[i].trim();
+                    if (line === '') continue;
+                    const parts = line.split(/\s+/);
+                    if (parts.length !== 2) {
+                        parseErrors.push(`Line ${i + 1}: Expected 2 values (city heuristic), got ${parts.length}: "${line}"`);
+                        continue;
+                    }
+                    const [city, h] = parts;
+                    const hNum = parseInt(h);
+                    if (isNaN(hNum) || hNum < 0) {
+                        parseErrors.push(`Line ${i + 1}: Invalid heuristic value "${h}" in line: "${line}"`);
+                        continue;
+                    }
+                    if (!city) {
+                        parseErrors.push(`Line ${i + 1}: Invalid city name in line: "${line}"`);
+                        continue;
+                    }
+                    heuristic.set(city, hNum);
+                }
+                if (parseErrors.length > 0) {
+                    outputDiv.textContent = `Heuristic file loaded with errors:\n${parseErrors.join('\n')}`;
+                } else {
+                    outputDiv.textContent = 'Heuristic file loaded successfully.';
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        function displayPathAndCost(source, destination, dist, path) {
+            const pathSequence = document.getElementById('path-sequence');
+            const pathTableBody = document.getElementById('path-table-body');
+            const totalCost = document.getElementById('total-cost');
+            const outputDiv = document.getElementById('output');
+            pathSequence.textContent = '';
+            pathTableBody.innerHTML = '';
+            totalCost.textContent = '';
+            if (dist.get(destination) === Infinity) {
+                const message = `No path found from ${source} to ${destination}\n`;
+                outputDiv.textContent = message;
+                return message;
+            }
+            let p = [];
+            let c = destination;
+            while (c !== '-1') {
+                p.push(c);
+                c = path.get(c);
+            }
+            p.reverse();
+            let output = `Distance: ${dist.get(destination)}\nPath:\n`;
+            pathSequence.textContent = `Path: ${p.join(' → ')}`;
+            for (let i = 1; i < p.length; i++) {
+                const segmentCost = dist.get(p[i]) - dist.get(p[i-1]);
+                output += `${p[i-1]} to ${p[i]}: ${segmentCost}\n`;
+                const row = document.createElement('tr');
+                row.innerHTML = `<td class="border p-2">${p[i-1]} to ${p[i]}</td><td class="border p-2">${segmentCost}</td>`;
+                pathTableBody.appendChild(row);
+                cy.getElementById(p[i-1]).addClass('highlighted-node');
+                cy.getElementById(p[i]).addClass('highlighted-node');
+                const edgeId = cy.edges(`[source = "${p[i-1]}"][target = "${p[i]}"],[source = "${p[i]}"][target = "${p[i-1]}"]`);
+                edgeId.addClass('highlighted-edge');
+            }
+            totalCost.textContent = `Total Distance: ${dist.get(destination)}`;
+            outputDiv.textContent = output;
+            return output;
+        }
+
+        function bfs(source, destination) {
+            let path = new Map();
+            let vis = new Map();
+            let dist = new Map();
+            for (let [city] of adj) {
+                vis.set(city, 0);
+                dist.set(city, Infinity);
+            }
+            let q = [[0, source]];
+            dist.set(source, 0);
+            vis.set(source, 1);
+            path.set(source, '-1');
+            while (q.length) {
+                let [pathCost, sourceCity] = q.shift();
+                if (sourceCity === destination) break;
+                for (let [destCity, cost] of adj.get(sourceCity) || []) {
+                    if (!vis.get(destCity)) {
+                        vis.set(destCity, 1);
+                        path.set(destCity, sourceCity);
+                        dist.set(destCity, cost + pathCost);
+                        q.push([dist.get(destCity), destCity]);
+                    }
+                }
+            }
+            return displayPathAndCost(source, destination, dist, path);
+        }
+
+        function dfs(destination, city, cost, dist, path, vis) {
+            if (city === destination) return true;
+            for (let [dCity, c] of adj.get(city) || []) {
+                if (!vis.get(dCity)) {
+                    dist.set(dCity, c + cost);
+                    path.set(dCity, city);
+                    vis.set(dCity, 1);
+                    if (dfs(destination, dCity, dist.get(dCity), dist, path, vis)) return true;
+                }
+            }
+            return false;
+        }
+
+        function runDFS(source, destination) {
+            let path = new Map();
+            let dist = new Map();
+            let vis = new Map();
+            for (let [city] of adj) {
+                dist.set(city, Infinity);
+                vis.set(city, 0);
+            }
+            dist.set(source, 0);
+            path.set(source, '-1');
+            vis.set(source, 1);
+            dfs(destination, source, 0, dist, path, vis);
+            return displayPathAndCost(source, destination, dist, path);
+        }
+
+        function ucs(source, destination) {
+            let path = new Map();
+            let dist = new Map();
+            let visited = new Map();
+            for (let [city] of adj) {
+                dist.set(city, Infinity);
+                visited.set(city, false);
+            }
+            let pq = [[0, source]];
+            dist.set(source, 0);
+            path.set(source, '-1');
+            while (pq.length) {
+                pq.sort((a, b) => a[0] - b[0]);
+                let [pathCost, sourceCity] = pq.shift();
+                if (visited.get(sourceCity)) continue;
+                visited.set(sourceCity, true);
+                if (sourceCity === destination) break;
+                for (let [destCity, cost] of adj.get(sourceCity) || []) {
+                    if (!visited.get(destCity) && pathCost + cost < dist.get(destCity)) {
+                        dist.set(destCity, pathCost + cost);
+                        path.set(destCity, sourceCity);
+                        pq.push([dist.get(destCity), destCity]);
+                    }
+                }
+            }
+            return displayPathAndCost(source, destination, dist, path);
+        }
+
+        function astar(source, destination) {
+            let pq = [[heuristic.get(source) || 0, source]];
+            let parent = new Map();
+            let gCost = new Map();
+            let visited = new Map();
+            for (let [city] of adj) {
+                gCost.set(city, Infinity);
+                visited.set(city, false);
+            }
+            gCost.set(source, 0);
+            parent.set(source, '-1');
+            while (pq.length) {
+                pq.sort((a, b) => a[0] - b[0]);
+                let [fCost, currentCity] = pq.shift();
+                if (visited.get(currentCity)) continue;
+                visited.set(currentCity, true);
+                if (currentCity === destination) break;
+                let gCostCurrent = gCost.get(currentCity);
+                for (let [adjCity, edgeCost] of adj.get(currentCity) || []) {
+                    if (!visited.get(adjCity) && gCostCurrent + edgeCost < gCost.get(adjCity)) {
+                        gCost.set(adjCity, gCostCurrent + edgeCost);
+                        parent.set(adjCity, currentCity);
+                        let newFCost = gCost.get(adjCity) + (heuristic.get(adjCity) || 0);
+                        pq.push([newFCost, adjCity]);
+                    }
+                }
+            }
+            return displayPathAndCost(source, destination, gCost, parent);
+        }
+
+        document.getElementById('run').addEventListener('click', function() {
+            const algorithm = document.getElementById('algorithm').value;
+            const source = document.getElementById('source').value.trim();
+            const destination = document.getElementById('destination').value.trim();
+            const outputDiv = document.getElementById('output');
+            cy.elements().removeClass('highlighted-node highlighted-edge');
+            if (parseErrors.length > 0) {
+                outputDiv.textContent = `Cannot run algorithm due to graph file errors:\n${parseErrors.join('\n')}`;
+                return;
+            }
+            if (!adj.size) {
+                outputDiv.textContent = 'Please upload a valid graph file.';
+                return;
+            }
+            if (!source || !destination) {
+                outputDiv.textContent = 'Please specify source and destination cities.';
+                return;
+            }
+            if (!adj.has(source) || !adj.has(destination)) {
+                outputDiv.textContent = 'Source or destination city not found in the graph.';
+                return;
+            }
+            if (algorithm === 'a*' && !heuristic.size) {
+                outputDiv.textContent = 'Please upload a heuristic file for A* search.';
+                return;
+            }
+            let result;
+            try {
+                if (algorithm === 'bfs') {
+                    result = bfs(source, destination);
+                } else if (algorithm === 'dfs') {
+                    result = runDFS(source, destination);
+                } else if (algorithm === 'ucs') {
+                    result = ucs(source, destination);
+                } else if (algorithm === 'a*') {
+                    result = astar(source, destination);
+                }
+            } catch (error) {
+                console.error('Error running algorithm:', error);
+                outputDiv.textContent = 'An error occurred while running the algorithm. Please check the console for details.';
+            }
+        });
+
+        // Initialize graph
+        initGraph();
+    </script>
+</body>
+</html>
