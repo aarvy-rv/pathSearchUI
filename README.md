@@ -1,6 +1,7 @@
 # Path Finding Algorithm
 
-This project implements several path-finding algorithms: **BFS**, **DFS**, **UCS**, and **A\***.
+This project implements several path-finding algorithms: **BFS**, **DFS**, **UCS**, and **A\***.  
+(If you want C++ implementation(CLI based) : https://github.com/aarvy-rv/Path-Search).
 
 ## 🛠️ How to Use
 
